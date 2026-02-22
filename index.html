@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Money Manager Analysis</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+  <div class="container mx-auto p-6">
+    <h1 class="text-3xl font-bold mb-6">Money Manager Analysis</h1>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white p-4 rounded shadow">
+        <h2 class="text-gray-500 text-sm">Net Cash Flow</h2>
+        <p class="text-2xl font-bold text-green-600" id="netCashFlow">₹ 0</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <h2 class="text-gray-500 text-sm">Last Month Income</h2>
+        <p class="text-2xl font-bold text-blue-600" id="lmIncome">₹ 0</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <h2 class="text-gray-500 text-sm">Last Month Expense</h2>
+        <p class="text-2xl font-bold text-red-600" id="lmExpense">₹ 0</p>
+      </div>
+      <div class="bg-white p-4 rounded shadow">
+        <h2 class="text-gray-500 text-sm">Last Month Savings</h2>
+        <p class="text-2xl font-bold text-purple-600" id="lmSavings">₹ 0</p>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="bg-white p-6 rounded shadow">
+        <h2 class="text-lg font-semibold mb-4">Weekly Spending (Last Month)</h2>
+        <canvas id="weeklyChart"></canvas>
+      </div>
+      <div class="bg-white p-6 rounded shadow">
+        <h2 class="text-lg font-semibold mb-4">Expense Distribution by Category (Last Month)</h2>
+        <canvas id="categoryChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadAndProcessData() {
+      const response = await fetch('transactions.csv');
+      const csvText = await response.text();
+      let lines = csvText.split('\n').filter(line => line.trim());
+      lines = lines.slice(1); // skip header
+
+      let transactions = lines.map(line => {
+        const values = line.split(',');
+        if (values.length < 4) return null;
+        const date = values[0];
+        const category = values[1];
+        const amount = parseFloat(values[2]);
+        let type = values[3];
+        if (isNaN(amount)) return null;
+        return { date, category, amount, type };
+      }).filter(t => t);
+
+      // Clean: fix inconsistencies
+      transactions.forEach(t => {
+        if (t.category === 'Salary') t.type = 'Income';
+        if (t.category === 'Investment') t.type = 'Expense';
+      });
+
+      // Parse dates and sort
+      transactions.forEach(t => {
+        const [d, m, y] = t.date.split('-');
+        t.dateObj = new Date(y, m - 1, d);
+      });
+      transactions.sort((a, b) => b.dateObj - a.dateObj);
+
+      // Find max date and last month
+      const maxDate = new Date(Math.max(...transactions.map(t => t.dateObj)));
+      const lastMonthStart = new Date(maxDate);
+      lastMonthStart.setDate(maxDate.getDate() - 30);
+
+      const lastMonth = transactions.filter(t => t.dateObj >= lastMonthStart);
+
+      // Calculations
+      const netCashFlow = transactions.reduce((sum, t) => sum + (t.type === 'Income' ? t.amount : -t.amount), 0);
+      const lmIncome = lastMonth.filter(t => t.type === 'Income').reduce((sum, t) => sum + t.amount, 0);
+      const lmExpense = lastMonth.filter(t => t.type === 'Expense').reduce((sum, t) => sum + t.amount, 0);
+      const lmSavings = lmIncome - lmExpense;
+
+      // Weekly spending
+      const minDate = new Date(Math.min(...lastMonth.map(t => t.dateObj)));
+      const weeklyData = [0, 0, 0, 0];
+      lastMonth.filter(t => t.type === 'Expense').forEach(t => {
+        const daysDiff = Math.floor((t.dateObj - minDate) / (1000 * 60 * 60 * 24));
+        const week = Math.min(Math.floor(daysDiff / 7), 3);
+        weeklyData[week] += t.amount;
+      });
+
+      // Category spending
+      const categoryData = {};
+      lastMonth.filter(t => t.type === 'Expense').forEach(t => {
+        categoryData[t.category] = (categoryData[t.category] || 0) + t.amount;
+      });
+
+      return { netCashFlow, lmIncome, lmExpense, lmSavings, weeklyData, categoryData };
+    }
+
+    function updateUI(data) {
+      document.getElementById('netCashFlow').textContent = `₹ ${data.netCashFlow.toLocaleString()}`;
+      document.getElementById('lmIncome').textContent = `₹ ${data.lmIncome.toLocaleString()}`;
+      document.getElementById('lmExpense').textContent = `₹ ${data.lmExpense.toLocaleString()}`;
+      document.getElementById('lmSavings').textContent = `₹ ${data.lmSavings.toLocaleString()}`;
+
+      // Weekly chart
+      const ctx1 = document.getElementById('weeklyChart').getContext('2d');
+      new Chart(ctx1, {
+        type: 'line',
+        data: {
+          labels: ['W1', 'W2', 'W3', 'W4'],
+          datasets: [{
+            data: data.weeklyData,
+            borderColor: '#3b82f6',
+            backgroundColor: '#3b82f6',
+            fill: false
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+
+      // Category pie
+      const ctx2 = document.getElementById('categoryChart').getContext('2d');
+      new Chart(ctx2, {
+        type: 'pie',
+        data: {
+          labels: Object.keys(data.categoryData),
+          datasets: [{
+            data: Object.values(data.categoryData),
+            backgroundColor: ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#06b6d4']
+          }]
+        }
+      });
+    }
+
+    loadAndProcessData().then(updateUI);
+  </script>
+</body>
+</html>
