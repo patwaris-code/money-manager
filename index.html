@@ -45,65 +45,45 @@
   </div>
 
   <script>
+    // Fetch processed data from the Flask backend instead of parsing the CSV client-side.
     async function loadAndProcessData() {
-      const response = await fetch('transactions.csv');
-      const csvText = await response.text();
-      let lines = csvText.split('\n').filter(line => line.trim());
-      lines = lines.slice(1); // skip header
+      try {
+        const [summaryRes, weeklyRes, categoryRes] = await Promise.all([
+          fetch('/api/summary'),
+          fetch('/api/weekly-spending'),
+          fetch('/api/category-breakdown')
+        ]);
 
-      let transactions = lines.map(line => {
-        const values = line.split(',');
-        if (values.length < 4) return null;
-        const date = values[0];
-        const category = values[1];
-        const amount = parseFloat(values[2]);
-        let type = values[3];
-        if (isNaN(amount)) return null;
-        return { date, category, amount, type };
-      }).filter(t => t);
+        if (!summaryRes.ok || !weeklyRes.ok || !categoryRes.ok) {
+          throw new Error('Failed to fetch one or more API endpoints');
+        }
 
-      // Clean: fix inconsistencies
-      transactions.forEach(t => {
-        if (t.category === 'Salary') t.type = 'Income';
-        if (t.category === 'Investment') t.type = 'Expense';
-      });
+        const summary = await summaryRes.json();
+        const weekly = await weeklyRes.json(); // [{week: 'W1', amount: x}, ...]
+        const categories = await categoryRes.json(); // [{category: 'Food', amount: x}, ...]
 
-      // Parse dates and sort
-      transactions.forEach(t => {
-        const [d, m, y] = t.date.split('-');
-        t.dateObj = new Date(y, m - 1, d);
-      });
-      transactions.sort((a, b) => b.dateObj - a.dateObj);
+        const netCashFlow = Number(summary.net_cash_flow || 0);
+        const lmIncome = Number((summary.last_month && summary.last_month.total_income) || 0);
+        const lmExpense = Number((summary.last_month && summary.last_month.total_expense) || 0);
+        const lmSavings = Number((summary.last_month && summary.last_month.net_savings) || (lmIncome - lmExpense));
 
-      // Find max date and last month
-      const maxDate = new Date(Math.max(...transactions.map(t => t.dateObj)));
-      const lastMonthStart = new Date(maxDate);
-      lastMonthStart.setDate(maxDate.getDate() - 30);
+        // Ensure weekly array is in W1..W4 order and numeric
+        const weeklyMap = { 'W1': 0, 'W2': 0, 'W3': 0, 'W4': 0 };
+        weekly.forEach(w => { if (w.week) weeklyMap[w.week] = Number(w.amount || 0); });
+        const weeklyData = [weeklyMap['W1'], weeklyMap['W2'], weeklyMap['W3'], weeklyMap['W4']];
 
-      const lastMonth = transactions.filter(t => t.dateObj >= lastMonthStart);
+        // Category object for charts
+        const categoryData = {};
+        categories.forEach(c => {
+          categoryData[c.category] = Number(c.amount || 0);
+        });
 
-      // Calculations
-      const netCashFlow = transactions.reduce((sum, t) => sum + (t.type === 'Income' ? t.amount : -t.amount), 0);
-      const lmIncome = lastMonth.filter(t => t.type === 'Income').reduce((sum, t) => sum + t.amount, 0);
-      const lmExpense = lastMonth.filter(t => t.type === 'Expense').reduce((sum, t) => sum + t.amount, 0);
-      const lmSavings = lmIncome - lmExpense;
-
-      // Weekly spending
-      const minDate = new Date(Math.min(...lastMonth.map(t => t.dateObj)));
-      const weeklyData = [0, 0, 0, 0];
-      lastMonth.filter(t => t.type === 'Expense').forEach(t => {
-        const daysDiff = Math.floor((t.dateObj - minDate) / (1000 * 60 * 60 * 24));
-        const week = Math.min(Math.floor(daysDiff / 7), 3);
-        weeklyData[week] += t.amount;
-      });
-
-      // Category spending
-      const categoryData = {};
-      lastMonth.filter(t => t.type === 'Expense').forEach(t => {
-        categoryData[t.category] = (categoryData[t.category] || 0) + t.amount;
-      });
-
-      return { netCashFlow, lmIncome, lmExpense, lmSavings, weeklyData, categoryData };
+        return { netCashFlow, lmIncome, lmExpense, lmSavings, weeklyData, categoryData };
+      } catch (err) {
+        console.error('Error loading data from API:', err);
+        // Return zeros to avoid breaking the UI
+        return { netCashFlow: 0, lmIncome: 0, lmExpense: 0, lmSavings: 0, weeklyData: [0,0,0,0], categoryData: {} };
+      }
     }
 
     function updateUI(data) {
@@ -127,9 +107,7 @@
         },
         options: {
           responsive: true,
-          scales: {
-            y: { beginAtZero: true }
-          }
+          scales: { y: { beginAtZero: true } }
         }
       });
 

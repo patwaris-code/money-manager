@@ -1,4 +1,5 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
+import os
 # from flask_cors import CORS
 import pandas as pd
 import numpy as np
@@ -6,6 +7,23 @@ import io
 
 app= Flask(__name__)
 #CORS(app)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# Serve the frontend `index.html` from the project root so visiting `/` loads the UI
+@app.route('/', methods=["GET"])
+def serve_index():
+    return send_from_directory(BASE_DIR, 'index.html')
+
+
+# Serve other static files (js/css) from project root. If file not found, fall back to index.html
+@app.route('/<path:filename>')
+def serve_files(filename):
+    file_path = os.path.join(BASE_DIR, filename)
+    if os.path.exists(file_path):
+        return send_from_directory(BASE_DIR, filename)
+    # Fallback for SPA routes
+    return send_from_directory(BASE_DIR, 'index.html')
 
 def load_and_clean_data(csv_path='transactions.csv'):
     df = pd.read_csv(csv_path, sep=',', parse_dates=["Date"], dayfirst=True, dtype={"Category": "string", "Amount": "float", "Type": "string"})
@@ -95,5 +113,6 @@ def get_category_breakdown():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # Use port 5500 to avoid conflicts with macOS services that may already listen on 5000
+    app.run(debug=True, host='127.0.0.1', port=5500)
 
