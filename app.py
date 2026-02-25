@@ -16,6 +16,11 @@ def serve_index():
     return send_from_directory(BASE_DIR, 'index.html')
 
 
+# Serve the stocks page
+@app.route('/stocks')
+def serve_stocks():
+    return send_from_directory(BASE_DIR, 'stocks.html')
+
 # Serve other static files (js/css) from project root. If file not found, fall back to index.html
 @app.route('/<path:filename>')
 def serve_files(filename):
@@ -115,4 +120,3 @@ def get_category_breakdown():
 if __name__ == "__main__":
     # Use port 5500 to avoid conflicts with macOS services that may already listen on 5000
     app.run(debug=True, host='127.0.0.1', port=5500)
-
