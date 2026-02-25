@@ -42,15 +42,45 @@
         <h2 class="text-lg font-semibold mb-4">Weekly Spending (Last Month)</h2>
         <canvas id="weeklyChart"></canvas>
       </div>
+
+      <!-- RIGHT CARD: ONLY THIS ONE GOT ENHANCED -->
       <div class="bg-white p-6 rounded shadow">
-        <h2 class="text-lg font-semibold mb-4">Expense Distribution by Category (Last Month)</h2>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold">Expense Distribution by Category (Last 30 Days)</h2>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex gap-2 border-b mb-4">
+          <button id="tabActual"
+            class="px-4 py-2 -mb-px border-b-2 border-blue-600 text-blue-600 font-semibold">
+            Actual
+          </button>
+          <button id="tabBudget"
+            class="px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+            Budget
+          </button>
+        </div>
+
+        <!-- Budget Inputs (hidden on Actual tab) -->
+        <div id="budgetPanel" class="hidden mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-sm text-gray-600">Set budget amounts (₹) for the last 30 days</p>
+            <button id="resetBudgets"
+              class="text-sm text-red-600 hover:text-red-700 font-semibold">
+              Reset
+            </button>
+          </div>
+
+          <div id="budgetInputs" class="space-y-2 max-h-44 overflow-auto pr-2"></div>
+        </div>
+
         <canvas id="categoryChart"></canvas>
       </div>
     </div>
   </div>
 
   <script>
-    // Fetch processed data from the Flask backend instead of parsing the CSV client-side.
+    // ====== Existing API fetch logic (UNCHANGED) ======
     async function loadAndProcessData() {
       try {
         const [summaryRes, weeklyRes, categoryRes] = await Promise.all([
@@ -72,12 +102,10 @@
         const lmExpense = Number((summary.last_month && summary.last_month.total_expense) || 0);
         const lmSavings = Number((summary.last_month && summary.last_month.net_savings) || (lmIncome - lmExpense));
 
-        // Ensure weekly array is in W1..W4 order and numeric
         const weeklyMap = { 'W1': 0, 'W2': 0, 'W3': 0, 'W4': 0 };
         weekly.forEach(w => { if (w.week) weeklyMap[w.week] = Number(w.amount || 0); });
         const weeklyData = [weeklyMap['W1'], weeklyMap['W2'], weeklyMap['W3'], weeklyMap['W4']];
 
-        // Category object for charts
         const categoryData = {};
         categories.forEach(c => {
           categoryData[c.category] = Number(c.amount || 0);
@@ -86,9 +114,130 @@
         return { netCashFlow, lmIncome, lmExpense, lmSavings, weeklyData, categoryData };
       } catch (err) {
         console.error('Error loading data from API:', err);
-        // Return zeros to avoid breaking the UI
         return { netCashFlow: 0, lmIncome: 0, lmExpense: 0, lmSavings: 0, weeklyData: [0,0,0,0], categoryData: {} };
       }
+    }
+
+    // ====== Budget Feature (NEW) ======
+    const BUDGET_STORAGE_KEY = "mm_budget_by_category_v1";
+    let actualCategoryData = {};
+    let budgetCategoryData = {};
+    let categoryChart = null;
+
+    function loadBudgetFromStorage() {
+      try {
+        const raw = localStorage.getItem(BUDGET_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function saveBudgetToStorage(obj) {
+      localStorage.setItem(BUDGET_STORAGE_KEY, JSON.stringify(obj));
+    }
+
+    function ensureBudgetKeysMatchActual() {
+      const stored = loadBudgetFromStorage();
+
+      // keep ONLY categories that exist in last-30-days categories (your requirement)
+      budgetCategoryData = {};
+      Object.keys(actualCategoryData).forEach(cat => {
+        budgetCategoryData[cat] = Number(stored[cat] || 0);
+      });
+
+      saveBudgetToStorage(budgetCategoryData);
+    }
+
+    function renderBudgetInputs() {
+      const wrap = document.getElementById("budgetInputs");
+      wrap.innerHTML = "";
+
+      const cats = Object.keys(budgetCategoryData);
+      if (cats.length === 0) {
+        wrap.innerHTML = `<p class="text-sm text-gray-500">No expense categories found in last 30 days.</p>`;
+        return;
+      }
+
+      cats.forEach(cat => {
+        const val = budgetCategoryData[cat] || 0;
+        const row = document.createElement("div");
+        row.className = "flex items-center justify-between gap-3";
+
+        row.innerHTML = `
+          <div class="text-sm font-medium text-gray-800 truncate" title="${cat}">${cat}</div>
+          <input
+            class="border rounded px-2 py-1 w-32 text-sm"
+            type="number"
+            min="0"
+            step="1"
+            value="${val}"
+            data-cat="${cat}"
+          />
+        `;
+        wrap.appendChild(row);
+      });
+
+      // attach input listeners
+      wrap.querySelectorAll("input[data-cat]").forEach(inp => {
+        inp.addEventListener("input", (e) => {
+          const cat = e.target.getAttribute("data-cat");
+          const v = Number(e.target.value || 0);
+          budgetCategoryData[cat] = isNaN(v) ? 0 : v;
+          saveBudgetToStorage(budgetCategoryData);
+          // live-update pie while on budget tab
+          if (isBudgetTabActive()) {
+            renderCategoryPie(budgetCategoryData);
+          }
+        });
+      });
+    }
+
+    function isBudgetTabActive() {
+      return !document.getElementById("budgetPanel").classList.contains("hidden");
+    }
+
+    function renderCategoryPie(obj) {
+      const labels = Object.keys(obj);
+      const values = Object.values(obj);
+
+      const ctx2 = document.getElementById('categoryChart').getContext('2d');
+
+      if (categoryChart) {
+        categoryChart.destroy();
+      }
+
+      categoryChart = new Chart(ctx2, {
+        type: 'pie',
+        data: {
+          labels: labels,
+          datasets: [{
+            data: values,
+            backgroundColor: ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#06b6d4']
+          }]
+        }
+      });
+    }
+
+    function switchToActualTab() {
+      document.getElementById("tabActual").className =
+        "px-4 py-2 -mb-px border-b-2 border-blue-600 text-blue-600 font-semibold";
+      document.getElementById("tabBudget").className =
+        "px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700";
+
+      document.getElementById("budgetPanel").classList.add("hidden");
+      renderCategoryPie(actualCategoryData);
+    }
+
+    function switchToBudgetTab() {
+      document.getElementById("tabBudget").className =
+        "px-4 py-2 -mb-px border-b-2 border-blue-600 text-blue-600 font-semibold";
+      document.getElementById("tabActual").className =
+        "px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700";
+
+      document.getElementById("budgetPanel").classList.remove("hidden");
+      renderBudgetInputs();
+      renderCategoryPie(budgetCategoryData);
     }
 
     function updateUI(data) {
@@ -97,7 +246,7 @@
       document.getElementById('lmExpense').textContent = `₹ ${data.lmExpense.toLocaleString()}`;
       document.getElementById('lmSavings').textContent = `₹ ${data.lmSavings.toLocaleString()}`;
 
-      // Weekly chart
+      // Weekly chart (unchanged)
       const ctx1 = document.getElementById('weeklyChart').getContext('2d');
       new Chart(ctx1, {
         type: 'line',
@@ -116,18 +265,26 @@
         }
       });
 
-      // Category pie
-      const ctx2 = document.getElementById('categoryChart').getContext('2d');
-      new Chart(ctx2, {
-        type: 'pie',
-        data: {
-          labels: Object.keys(data.categoryData),
-          datasets: [{
-            data: Object.values(data.categoryData),
-            backgroundColor: ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#06b6d4']
-          }]
-        }
-      });
+      // Actual categories from backend (last 30 days)
+      actualCategoryData = data.categoryData;
+
+      // Budget: match same category set + persist in localStorage
+      ensureBudgetKeysMatchActual();
+
+      // Default view: Actual
+      renderCategoryPie(actualCategoryData);
+
+      // Tabs wiring
+      document.getElementById("tabActual").onclick = switchToActualTab;
+      document.getElementById("tabBudget").onclick = switchToBudgetTab;
+
+      // Reset budgets
+      document.getElementById("resetBudgets").onclick = () => {
+        Object.keys(budgetCategoryData).forEach(k => budgetCategoryData[k] = 0);
+        saveBudgetToStorage(budgetCategoryData);
+        renderBudgetInputs();
+        if (isBudgetTabActive()) renderCategoryPie(budgetCategoryData);
+      };
     }
 
     loadAndProcessData().then(updateUI);
