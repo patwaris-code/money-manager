@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Stocks - Money Manager</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-gray-100 font-sans">
   <div class="container mx-auto p-6">
@@ -19,10 +20,250 @@
       <div class="w-48"></div>
     </div>
 
-    <div class="bg-white p-12 rounded shadow text-center">
-      <p class="text-gray-500 text-lg">This page is currently empty.</p>
-      <p class="text-gray-400 text-sm mt-2">Stock portfolio features coming soon...</p>
+    <!-- Loading State -->
+    <div id="loading" class="text-center py-12">
+      <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <p class="mt-4 text-gray-600">Loading Google stock data...</p>
+    </div>
+
+    <!-- Error State -->
+    <div id="error" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
+      <p id="error-message"></p>
+    </div>
+
+    <!-- Stock Content -->
+    <div id="stock-content" class="hidden">
+      <!-- Stock Header -->
+      <div class="bg-white p-6 rounded shadow mb-6">
+        <div class="flex justify-between items-start">
+          <div>
+            <h2 class="text-2xl font-bold text-gray-800" id="stock-name">Alphabet Inc. (GOOGL)</h2>
+            <p class="text-gray-500 text-sm" id="last-updated">Last updated: --</p>
+          </div>
+          <div class="text-right">
+            <p class="text-4xl font-bold text-gray-800" id="current-price">$0.00</p>
+            <p class="text-lg font-semibold" id="price-change">
+              <span id="change-amount">$0.00</span>
+              <span id="change-percent">(0.00%)</span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Additional Info Cards -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white p-4 rounded shadow">
+          <h3 class="text-gray-500 text-sm mb-1">Open</h3>
+          <p class="text-xl font-bold text-gray-800" id="open-price">$0.00</p>
+        </div>
+        <div class="bg-white p-4 rounded shadow">
+          <h3 class="text-gray-500 text-sm mb-1">High</h3>
+          <p class="text-xl font-bold text-gray-800" id="high-price">$0.00</p>
+        </div>
+        <div class="bg-white p-4 rounded shadow">
+          <h3 class="text-gray-500 text-sm mb-1">Low</h3>
+          <p class="text-xl font-bold text-gray-800" id="low-price">$0.00</p>
+        </div>
+        <div class="bg-white p-4 rounded shadow">
+          <h3 class="text-gray-500 text-sm mb-1">Volume</h3>
+          <p class="text-xl font-bold text-gray-800" id="volume">0</p>
+        </div>
+      </div>
+
+      <!-- Time Range Selector -->
+      <div class="bg-white p-4 rounded shadow mb-6">
+        <div class="flex gap-2 flex-wrap">
+          <button onclick="changeTimeRange(7)" class="time-btn px-4 py-2 rounded bg-blue-600 text-white font-semibold hover:bg-blue-700 transition">1W</button>
+          <button onclick="changeTimeRange(30)" class="time-btn px-4 py-2 rounded bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300 transition">1M</button>
+          <button onclick="changeTimeRange(90)" class="time-btn px-4 py-2 rounded bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300 transition">3M</button>
+          <button onclick="changeTimeRange(180)" class="time-btn px-4 py-2 rounded bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300 transition">6M</button>
+          <button onclick="changeTimeRange(365)" class="time-btn px-4 py-2 rounded bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300 transition">1Y</button>
+          <button onclick="changeTimeRange(100)" class="time-btn px-4 py-2 rounded bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300 transition">MAX</button>
+        </div>
+      </div>
+
+      <!-- Price Chart -->
+      <div class="bg-white p-6 rounded shadow">
+        <h2 class="text-lg font-semibold mb-4">Price History</h2>
+        <canvas id="priceChart"></canvas>
+      </div>
     </div>
   </div>
+
+  <script>
+    const STOCK_SYMBOL = 'GOOGL';
+    let chartInstance = null;
+    let fullChartData = { dates: [], closes: [] };
+    let currentRange = 7;
+
+    async function loadStockData() {
+      try {
+        console.log('🚀 Starting to fetch stock data for', STOCK_SYMBOL);
+        
+        const [quoteRes, timeseriesRes] = await Promise.all([
+          fetch(`/api/stock-quote/${STOCK_SYMBOL}`),
+          fetch(`/api/stock-timeseries/${STOCK_SYMBOL}`)
+        ]);
+
+        console.log('📡 Fetch responses received');
+        console.log('Quote response status:', quoteRes.status, quoteRes.ok);
+        console.log('Timeseries response status:', timeseriesRes.status, timeseriesRes.ok);
+
+        if (!quoteRes.ok || !timeseriesRes.ok) {
+          throw new Error(`Failed to fetch stock data - Quote: ${quoteRes.status}, Timeseries: ${timeseriesRes.status}`);
+        }
+
+        const quote = await quoteRes.json();
+        const timeseries = await timeseriesRes.json();
+
+        console.log('✅ Quote data received:', quote);
+        console.log('✅ Timeseries data received:', {
+          symbol: timeseries.symbol,
+          dateCount: timeseries.dates?.length,
+          closeCount: timeseries.closes?.length,
+          firstDate: timeseries.dates?.[0],
+          lastDate: timeseries.dates?.[timeseries.dates?.length - 1]
+        });
+
+        if (quote.error || timeseries.error) {
+          throw new Error(quote.error || timeseries.error);
+        }
+
+        console.log('📊 Displaying stock info...');
+        displayStockInfo(quote);
+        
+        console.log('📈 Setting chart data...');
+        fullChartData = { dates: timeseries.dates, closes: timeseries.closes };
+        console.log('Chart data set:', {
+          dateCount: fullChartData.dates.length,
+          closeCount: fullChartData.closes.length
+        });
+        
+        console.log('🎨 Updating chart with range:', currentRange);
+        updateChart(currentRange);
+
+        console.log('✨ Hiding loading, showing content');
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('stock-content').classList.remove('hidden');
+        console.log('🎉 Stock data loaded successfully!');
+
+      } catch (err) {
+        console.error('❌ Error loading stock data:', err);
+        console.error('Error stack:', err.stack);
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('error').classList.remove('hidden');
+        document.getElementById('error-message').textContent = 
+          err.message || 'Failed to load stock data. Please check your API key and try again.';
+      }
+    }
+
+    function displayStockInfo(quote) {
+      document.getElementById('current-price').textContent = `$${quote.price.toFixed(2)}`;
+      
+      const change = quote.change;
+      const changePercent = parseFloat(quote.change_percent);
+      const isPositive = change >= 0;
+      
+      const changeElement = document.getElementById('price-change');
+      changeElement.className = `text-lg font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`;
+      
+      document.getElementById('change-amount').textContent = `${isPositive ? '+' : ''}$${Math.abs(change).toFixed(2)}`;
+      document.getElementById('change-percent').textContent = `(${isPositive ? '+' : ''}${changePercent.toFixed(2)}%)`;
+      
+      document.getElementById('open-price').textContent = `$${quote.open.toFixed(2)}`;
+      document.getElementById('high-price').textContent = `$${quote.high.toFixed(2)}`;
+      document.getElementById('low-price').textContent = `$${quote.low.toFixed(2)}`;
+      document.getElementById('volume').textContent = quote.volume.toLocaleString();
+      
+      document.getElementById('last-updated').textContent = `Last updated: ${quote.latest_trading_day}`;
+    }
+
+    function updateChart(days) {
+      const dataLength = fullChartData.dates.length;
+      const startIdx = Math.max(0, dataLength - days);
+      
+      const dates = fullChartData.dates.slice(startIdx);
+      const closes = fullChartData.closes.slice(startIdx);
+
+      const ctx = document.getElementById('priceChart').getContext('2d');
+      
+      if (chartInstance) {
+        chartInstance.destroy();
+      }
+
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Closing Price',
+            data: closes,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            fill: true,
+            tension: 0.1,
+            pointRadius: 0,
+            pointHoverRadius: 5
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: false
+            },
+            tooltip: {
+              mode: 'index',
+              intersect: false,
+              callbacks: {
+                label: function(context) {
+                  return `$${context.parsed.y.toFixed(2)}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              display: true,
+              grid: {
+                display: false
+              },
+              ticks: {
+                maxTicksLimit: 8
+              }
+            },
+            y: {
+              display: true,
+              grid: {
+                color: 'rgba(0, 0, 0, 0.05)'
+              },
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toFixed(0);
+                }
+              }
+            }
+          },
+          interaction: {
+            intersect: false,
+            mode: 'index'
+          }
+        }
+      });
+    }
+
+    function changeTimeRange(days) {
+      currentRange = days;
+      updateChart(days);
+      
+      document.querySelectorAll('.time-btn').forEach(btn => {
+        btn.className = 'time-btn px-4 py-2 rounded bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300 transition';
+      });
+      event.target.className = 'time-btn px-4 py-2 rounded bg-blue-600 text-white font-semibold hover:bg-blue-700 transition';
+    }
+
+    loadStockData();
+  </script>
 </body>
 </html>
